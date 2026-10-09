@@ -27,12 +27,13 @@ OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 # ---------------------------------------------------------------------------
 # Provider selection
 # ---------------------------------------------------------------------------
-VALID_PROVIDERS = ("openai", "anthropic", "gemini", "groq")
+VALID_PROVIDERS = ("meshapi", "openai", "anthropic", "gemini", "groq")
 LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai").lower()
 if LLM_PROVIDER not in VALID_PROVIDERS:
     raise ValueError(f"LLM_PROVIDER must be one of {VALID_PROVIDERS}, got {LLM_PROVIDER!r}")
 
 # OpenAI-compatible base URLs for providers without a dedicated Outlines/DSPy path
+MESHAPI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.meshapi.ai/v1")
 GROQ_BASE_URL: str = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 GEMINI_BASE_URL: str = os.getenv(
     "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -41,6 +42,7 @@ GEMINI_BASE_URL: str = os.getenv(
 # ---------------------------------------------------------------------------
 # API Keys
 # ---------------------------------------------------------------------------
+MESH_API_KEY: str | None = os.getenv("MESH_API_KEY")
 OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY: str | None = os.getenv("ANTHROPIC_API_KEY")
 BRAINTRUST_API_KEY: str | None = os.getenv("BRAINTRUST_API_KEY")
@@ -54,6 +56,7 @@ GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY") or GOOGLE_API_KEY
 # ---------------------------------------------------------------------------
 # Model names (all overridable via .env)
 # ---------------------------------------------------------------------------
+MESHAPI_MODEL: str = os.getenv("OPENAI_MODEL", "openai/gpt-5.6-sol")
 GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
 GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
@@ -69,6 +72,7 @@ REDTEAM_SAMPLE_SIZE: int = int(os.getenv("REDTEAM_SAMPLE_SIZE", "50"))
 # Provider / model resolution
 # ---------------------------------------------------------------------------
 _PROVIDER_KEY_ENV = {
+    "meshapi": "MESH_API_KEY",
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "gemini": "GEMINI_API_KEY (or GOOGLE_API_KEY)",
@@ -84,6 +88,7 @@ def get_active_provider() -> str:
 def require_api_key(provider: str) -> str:
     """Return the API key for a provider, with a student-friendly error."""
     key = {
+        "meshapi": MESH_API_KEY,
         "openai": OPENAI_API_KEY,
         "anthropic": ANTHROPIC_API_KEY,
         "gemini": GEMINI_API_KEY,
@@ -103,6 +108,8 @@ def get_model(provider: str | None = None) -> str:
     provider = provider or LLM_PROVIDER
     if USE_OLLAMA:
         return "ollama/llama3.1"
+    if provider == "meshapi":
+        return MESHAPI_MODEL
     if provider == "openai":
         return "gpt-4o-mini" if USE_SMALL_MODEL else "gpt-4o"
     if provider == "anthropic":
@@ -112,6 +119,11 @@ def get_model(provider: str | None = None) -> str:
     if provider == "groq":
         return GROQ_MODEL
     raise ValueError(f"Unknown provider: {provider!r}")
+
+
+def get_meshapi_model() -> str:
+    """Return the MeshAPI model name."""
+    return get_model("meshapi")
 
 
 def get_openai_model() -> str:
@@ -144,6 +156,12 @@ def get_dspy_lm(provider: str | None = None):
     provider = provider or LLM_PROVIDER
     if USE_OLLAMA:
         return dspy.LM("ollama_chat/llama3.1", api_base=OLLAMA_BASE_URL)
+    if provider == "meshapi":
+        return dspy.LM(
+            f"openai/{get_model('meshapi')}",
+            api_key=require_api_key("meshapi"),
+            api_base=MESHAPI_BASE_URL,
+        )
     if provider == "gemini":
         return dspy.LM(f"gemini/{get_model('gemini')}", api_key=require_api_key("gemini"))
     if provider == "groq":
@@ -260,6 +278,11 @@ def get_instructor_client(provider: str | None = None):
         client = OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama")
         return _RetryingInstructor(instructor.from_openai(client))
 
+    if provider == "meshapi":
+        from openai import OpenAI
+
+        client = OpenAI(base_url=MESHAPI_BASE_URL, api_key=require_api_key("meshapi"))
+        return _RetryingInstructor(instructor.from_openai(client))
     if provider == "gemini":
         from google import genai  # type: ignore[import-not-found]
         from instructor.mode import Mode  # type: ignore[import-not-found]
@@ -305,6 +328,9 @@ def get_outlines_model(provider: str | None = None):
             OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama"),
             "llama3.1",
         )
+    if provider == "meshapi":
+        client = OpenAI(base_url=MESHAPI_BASE_URL, api_key=require_api_key("meshapi"))
+        return outlines.from_openai(client, get_model("meshapi"))
     if provider == "gemini":
         client = OpenAI(base_url=GEMINI_BASE_URL, api_key=require_api_key("gemini"))
         return outlines.from_openai(client, get_model("gemini"))
@@ -325,6 +351,8 @@ def get_openai_client(provider: str | None = None):
     provider = provider or LLM_PROVIDER
     if USE_OLLAMA:
         return OpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama")
+    if provider == "meshapi":
+        return OpenAI(base_url=MESHAPI_BASE_URL, api_key=require_api_key("meshapi"))
     if provider == "gemini":
         return OpenAI(base_url=GEMINI_BASE_URL, api_key=require_api_key("gemini"))
     if provider == "groq":
@@ -341,6 +369,8 @@ def get_async_openai_client(provider: str | None = None):
     provider = provider or LLM_PROVIDER
     if USE_OLLAMA:
         return AsyncOpenAI(base_url=f"{OLLAMA_BASE_URL}/v1", api_key="ollama")
+    if provider == "meshapi":
+        return AsyncOpenAI(base_url=MESHAPI_BASE_URL, api_key=require_api_key("meshapi"))
     if provider == "gemini":
         return AsyncOpenAI(base_url=GEMINI_BASE_URL, api_key=require_api_key("gemini"))
     if provider == "groq":
@@ -371,6 +401,7 @@ def print_config() -> None:
     print(f"LLM_PROVIDER:      {LLM_PROVIDER}")
     for p in VALID_PROVIDERS:
         print(f"  {p + ' model:':<16} {get_model(p)}")
+    print(f"MESHAPI_BASE_URL:  {MESHAPI_BASE_URL}")
     print(f"SAMPLE_SIZE:       {SAMPLE_SIZE}")
     print(f"DSPY_TRIALS:       {DSPY_OPTIMIZER_TRIALS}")
     print("=" * 50)
